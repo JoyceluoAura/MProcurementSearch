@@ -1,3 +1,18 @@
+import sys
+import subprocess
+
+def ensure_packages(packages):
+    missing = []
+    for pkg in packages:
+        try:
+            __import__(pkg)
+        except ModuleNotFoundError:
+            missing.append(pkg)
+    if missing:
+        subprocess.check_call([sys.executable, "-m", "pip", "-q", "install", *missing])
+
+ensure_packages(["pandas", "requests", "tenacity", "tldextract", "tavily", "firecrawl", "pydantic", "openai", "openpyxl"])
+
 import os
 import re
 import json
