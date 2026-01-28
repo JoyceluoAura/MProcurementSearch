@@ -86,19 +86,23 @@ SOURCE_PRIORITY = {
     "unknown": 6,
 }
 
-def require_env(var_name: str) -> str:
-    value = os.environ.get(var_name)
-    if value:
-        return value
-    message = (
-        f"缺少环境变量 {var_name}。请在 Colab 左侧 Secrets 中添加，或在代码中设置：\n"
-        f"os.environ[\"{var_name}\"] = \"YOUR_KEY\""
-    )
-    raise RuntimeError(message)
+def collect_api_keys() -> dict:
+    keys = {
+        "TAVILY_API_KEY": os.environ.get("TAVILY_API_KEY"),
+        "FIRECRAWL_API_KEY": os.environ.get("FIRECRAWL_API_KEY"),
+        "OPENAI_API_KEY": os.environ.get("OPENAI_API_KEY"),
+    }
+    missing = [k for k, v in keys.items() if not v]
+    if missing:
+        print("缺少环境变量：" + ", ".join(missing))
+        print("请在 Colab 左侧 Secrets 中添加，或在代码中设置，例如：")
+        for k in missing:
+            print(f"os.environ[\"{k}\"] = \"YOUR_KEY\"")
+    return keys
 
-TAVILY_API_KEY = require_env("TAVILY_API_KEY")
-FIRECRAWL_API_KEY = require_env("FIRECRAWL_API_KEY")
-OPENAI_API_KEY = require_env("OPENAI_API_KEY")
+API_KEYS = collect_api_keys()
+
+
 
 
 
@@ -126,6 +130,7 @@ def load_equipment_list(sheet_url: str, fallback: List[Dict[str, Any]]) -> List[
             "拟购预算(万RMB)": "budget_wan_rmb",
         }
         df = df.rename(columns=columns)
+        df["budget_wan_rmb"] = pd.to_numeric(df["budget_wan_rmb"], errors="coerce")
         required = {"id", "name_cn", "budget_wan_rmb"}
         if not required.issubset(df.columns):
             raise ValueError("表格缺少必要列")
@@ -168,7 +173,7 @@ def build_queries(item: Dict[str, Any]) -> List[str]:
     return cn_queries + en_queries + site_queries
 
 
-tavily_client = TavilyClient(api_key=TAVILY_API_KEY)
+tavily_client = TavilyClient(api_key=API_KEYS.get("TAVILY_API_KEY", ""))
 
 
 def tavily_search(queries: List[str], max_results: int = 8) -> List[Dict[str, Any]]:
@@ -222,7 +227,7 @@ def filter_urls(results: List[Dict[str, Any]]) -> List[str]:
     return urls
 
 
-firecrawl_app = FirecrawlApp(api_key=FIRECRAWL_API_KEY)
+firecrawl_app = FirecrawlApp(api_key=API_KEYS.get("FIRECRAWL_API_KEY", ""))
 
 
 @retry(wait=wait_exponential(multiplier=1, min=1, max=8), stop=stop_after_attempt(3))
@@ -249,7 +254,7 @@ class PriceEvidence(BaseModel):
     published_date: Optional[str] = None
 
 
-openai_client = OpenAI(api_key=OPENAI_API_KEY)
+openai_client = OpenAI(api_key=API_KEYS.get("OPENAI_API_KEY", ""))
 
 EXTRACTION_SYSTEM = """
 你是严谨的采购价格抽取助手。只输出 JSON 对象，不要输出多余文本。
@@ -374,7 +379,22 @@ def median_price(prices: List[float]) -> Optional[float]:
     return round((nums[mid - 1] + nums[mid]) / 2, 4)
 
 
+def build_empty_df() -> pd.DataFrame:
+    columns = [
+        "编号", "设备名称", "品牌及型号提示", "拟购预算(万RMB)",
+        "对比A_品牌", "对比A_型号", "对比A_价格(万RMB)", "对比A_原币种", "对比A_原价格", "对比A_来源类型", "对比A_可信度", "对比A_URL", "对比A_证据片段",
+        "对比B_品牌", "对比B_型号", "对比B_价格(万RMB)", "对比B_原币种", "对比B_原价格", "对比B_来源类型", "对比B_可信度", "对比B_URL", "对比B_证据片段",
+        "对比C_品牌", "对比C_型号", "对比C_价格(万RMB)", "对比C_原币种", "对比C_原价格", "对比C_来源类型", "对比C_可信度", "对比C_URL", "对比C_证据片段",
+        "中位数价格(万RMB)", "证据数量", "审计备注/建议"
+    ]
+    return pd.DataFrame(columns=columns)
+
+
 def run_pipeline(equipment_list: List[Dict[str, Any]]) -> pd.DataFrame:
+    missing = [k for k, v in API_KEYS.items() if not v]
+    if missing:
+        print("API key 未设置，已停止执行。")
+        return build_empty_df()
     rows = []
 
     for item in equipment_list:
@@ -457,6 +477,10 @@ def build_summary(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def main() -> None:
+    missing = [k for k, v in API_KEYS.items() if not v]
+    if missing:
+        print("API key 未设置，已停止执行。")
+        return
     df = run_pipeline(EQUIPMENT_LIST)
     summary_df = build_summary(df)
     output_path = "/content/equipment_price_verification.xlsx"
