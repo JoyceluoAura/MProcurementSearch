@@ -46,19 +46,16 @@ FALLBACK_EQUIPMENT_LIST = [
     {"id": 3, "name_cn": "镀膜仪", "model_hint": "Leica EM ACE600 或同类型", "budget_wan_rmb": 50},
 ]
 
-MAX_URLS_PER_ITEM = 12
-MIN_CONFIDENCE = 0.55
+MAX_URLS_PER_ITEM = 4
+MIN_CONFIDENCE = 0.75
+
+MATERIAL_KEYWORDS = [
+    "微粉", "金刚石", "陶瓷", "先进材料", "粉体", "硬质材料",
+    "diamond", "ceramic", "advanced materials", "powder", "micropowder"
+]
 
 ALLOWED_DOMAINS = {
     "ccgp.gov.cn",
-    "china-bidding.com",
-    "bidcenter.com.cn",
-    "zhaobiao.cn",
-    "okcis.com",
-    "thomassci.com",
-    "fishersci.com",
-    "vwr.com",
-    "coleparmer.com",
 }
 
 MANUFACTURER_KEYWORDS = [
@@ -91,8 +88,8 @@ SOURCE_PRIORITY = {
     "tender": 2,
     "list": 3,
     "dealer_quote": 4,
-    "ecommerce": 5,
-    "unknown": 6,
+    "ecommerce": 7,
+    "unknown": 8,
 }
 
 def collect_api_keys() -> dict:
@@ -162,15 +159,15 @@ def build_queries(item: Dict[str, Any]) -> List[str]:
     model_hint = item.get("model_hint", "")
     base_en = model_hint if model_hint else name_cn
 
+    material_cn = "微粉 金刚石 陶瓷 先进材料"
+    material_en = "micropowder diamond ceramic advanced materials"
     cn_queries = [
-        f"{name_cn} {model_hint} 价格",
-        f"{name_cn} {model_hint} 招标 中标 采购 金额",
-        f"{name_cn} {model_hint} 报价 单价",
+        f"{name_cn} {model_hint} {material_cn} 价格",
+        f"{name_cn} {model_hint} {material_cn} 招标 中标 采购",
     ]
     en_queries = [
-        f"{base_en} price quotation",
-        f"{base_en} tender award price",
-        f"{base_en} procurement contract price",
+        f"{base_en} {material_en} price",
+        f"{base_en} {material_en} tender award",
     ]
 
     site_targets = [
@@ -196,7 +193,7 @@ def get_clients():
     return tavily_client, firecrawl_app, openai_client
 
 
-def tavily_search(tavily_client: TavilyClient, queries: List[str], max_results: int = 8) -> List[Dict[str, Any]]:
+def tavily_search(tavily_client: TavilyClient, queries: List[str], max_results: int = 5) -> List[Dict[str, Any]]:
     results = []
     for q in queries:
         resp = tavily_client.search(query=q, max_results=max_results)
@@ -226,6 +223,10 @@ def is_allowed(url: str) -> bool:
         return True
     if any(keyword in hostname for keyword in MANUFACTURER_KEYWORDS):
         return True
+
+    material_hit = any(k in url_lower for k in MATERIAL_KEYWORDS)
+    if not material_hit:
+        return False
 
     path_hint = any(tag in url_lower for tag in ["/tender", "/procurement", "/zhaobiao", "/cg/"])
     if path_hint and hostname.endswith(".edu.cn"):
@@ -356,11 +357,22 @@ def score_candidate(candidate: PriceEvidence, budget_wan: float) -> Dict[str, An
     }
 
 
-def select_top_candidates(candidates: List[PriceEvidence], budget_wan: float) -> (List[Dict[str, Any]], str):
+def is_model_hint_match(candidate: PriceEvidence, model_hint: str) -> bool:
+    if not model_hint:
+        return True
+    hint = model_hint.lower()
+    fields = " ".join(filter(None, [candidate.brand or "", candidate.model or "", candidate.evidence_snippet or ""]))
+    return hint in fields.lower()
+
+
+def select_top_candidates(candidates: List[PriceEvidence], budget_wan: float, model_hint: str) -> (List[Dict[str, Any]], str):
     notes = []
-    filtered = [c for c in candidates if c.matches_target == 1 and c.confidence >= MIN_CONFIDENCE]
+    filtered = [
+        c for c in candidates
+        if c.matches_target == 1 and c.confidence >= MIN_CONFIDENCE and is_model_hint_match(c, model_hint)
+    ]
     if not filtered:
-        return [], "无匹配证据（匹配度或置信度不足）"
+        return [], "无匹配证据（匹配度/置信度/型号一致性不足）"
 
     scored = [score_candidate(c, budget_wan) for c in filtered]
 
@@ -428,7 +440,7 @@ def run_pipeline(equipment_list: List[Dict[str, Any]]) -> pd.DataFrame:
             except Exception:
                 continue
 
-        selected, note = select_top_candidates(evidences, item["budget_wan_rmb"])
+        selected, note = select_top_candidates(evidences, item["budget_wan_rmb"], item.get("model_hint", ""))
         prices_wan = [s["price_wan"] for s in selected]
         median_wan = median_price(prices_wan)
 
