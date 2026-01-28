@@ -130,10 +130,10 @@ def load_equipment_list(sheet_url: str, fallback: List[Dict[str, Any]]) -> List[
             "拟购预算(万RMB)": "budget_wan_rmb",
         }
         df = df.rename(columns=columns)
-        df["budget_wan_rmb"] = pd.to_numeric(df["budget_wan_rmb"], errors="coerce")
         required = {"id", "name_cn", "budget_wan_rmb"}
         if not required.issubset(df.columns):
             raise ValueError("表格缺少必要列")
+        df["budget_wan_rmb"] = pd.to_numeric(df["budget_wan_rmb"], errors="coerce")
         records = df.to_dict(orient="records")
         for record in records:
             record.setdefault("model_hint", "")
@@ -173,10 +173,19 @@ def build_queries(item: Dict[str, Any]) -> List[str]:
     return cn_queries + en_queries + site_queries
 
 
-tavily_client = TavilyClient(api_key=API_KEYS.get("TAVILY_API_KEY", ""))
+
+def get_clients():
+    missing = [k for k, v in API_KEYS.items() if not v]
+    if missing:
+        print("API key 未设置，已停止执行。")
+        return None
+    tavily_client = TavilyClient(api_key=API_KEYS.get("TAVILY_API_KEY", ""))
+    firecrawl_app = FirecrawlApp(api_key=API_KEYS.get("FIRECRAWL_API_KEY", ""))
+    openai_client = OpenAI(api_key=API_KEYS.get("OPENAI_API_KEY", ""))
+    return tavily_client, firecrawl_app, openai_client
 
 
-def tavily_search(queries: List[str], max_results: int = 8) -> List[Dict[str, Any]]:
+def tavily_search(tavily_client: TavilyClient, queries: List[str], max_results: int = 8) -> List[Dict[str, Any]]:
     results = []
     for q in queries:
         resp = tavily_client.search(query=q, max_results=max_results)
@@ -227,11 +236,9 @@ def filter_urls(results: List[Dict[str, Any]]) -> List[str]:
     return urls
 
 
-firecrawl_app = FirecrawlApp(api_key=API_KEYS.get("FIRECRAWL_API_KEY", ""))
-
 
 @retry(wait=wait_exponential(multiplier=1, min=1, max=8), stop=stop_after_attempt(3))
-def scrape_url(url: str) -> Dict[str, Any]:
+def scrape_url(firecrawl_app: FirecrawlApp, url: str) -> Dict[str, Any]:
     return firecrawl_app.scrape_url(
         url,
         params={
@@ -254,8 +261,6 @@ class PriceEvidence(BaseModel):
     published_date: Optional[str] = None
 
 
-openai_client = OpenAI(api_key=API_KEYS.get("OPENAI_API_KEY", ""))
-
 EXTRACTION_SYSTEM = """
 你是严谨的采购价格抽取助手。只输出 JSON 对象，不要输出多余文本。
 请从网页内容中抽取与目标设备相关的价格事实。
@@ -266,7 +271,7 @@ confidence 在 0-1 之间。
 """
 
 
-def extract_price(equipment: Dict[str, Any], scraped: Dict[str, Any], url: str) -> Optional[PriceEvidence]:
+def extract_price(openai_client: OpenAI, equipment: Dict[str, Any], scraped: Dict[str, Any], url: str) -> Optional[PriceEvidence]:
     content = scraped.get("markdown") or scraped.get("content") or ""
     title = scraped.get("metadata", {}).get("title", "")
     published = scraped.get("metadata", {}).get("publishedDate")
@@ -391,22 +396,22 @@ def build_empty_df() -> pd.DataFrame:
 
 
 def run_pipeline(equipment_list: List[Dict[str, Any]]) -> pd.DataFrame:
-    missing = [k for k, v in API_KEYS.items() if not v]
-    if missing:
-        print("API key 未设置，已停止执行。")
+    clients = get_clients()
+    if not clients:
         return build_empty_df()
+    tavily_client, firecrawl_app, openai_client = clients
     rows = []
 
     for item in equipment_list:
         queries = build_queries(item)
-        search_results = tavily_search(queries)
+        search_results = tavily_search(tavily_client, queries)
         urls = filter_urls(search_results)
 
         evidences = []
         for url in urls:
             try:
-                scraped = scrape_url(url)
-                extracted = extract_price(item, scraped, url)
+                scraped = scrape_url(firecrawl_app, url)
+                extracted = extract_price(openai_client, item, scraped, url)
                 if extracted and extracted.price_value and extracted.currency:
                     evidences.append(extracted)
             except Exception:
