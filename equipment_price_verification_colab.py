@@ -86,9 +86,21 @@ SOURCE_PRIORITY = {
     "unknown": 6,
 }
 
-assert os.environ.get("TAVILY_API_KEY"), "TAVILY_API_KEY 未设置"
-assert os.environ.get("FIRECRAWL_API_KEY"), "FIRECRAWL_API_KEY 未设置"
-assert os.environ.get("OPENAI_API_KEY"), "OPENAI_API_KEY 未设置"
+def require_env(var_name: str) -> str:
+    value = os.environ.get(var_name)
+    if value:
+        return value
+    message = (
+        f"缺少环境变量 {var_name}。请在 Colab 左侧 Secrets 中添加，或在代码中设置：\n"
+        f"os.environ[\"{var_name}\"] = \"YOUR_KEY\""
+    )
+    raise RuntimeError(message)
+
+TAVILY_API_KEY = require_env("TAVILY_API_KEY")
+FIRECRAWL_API_KEY = require_env("FIRECRAWL_API_KEY")
+OPENAI_API_KEY = require_env("OPENAI_API_KEY")
+
+
 
 
 def sheet_url_to_csv(url: str) -> str:
@@ -156,7 +168,7 @@ def build_queries(item: Dict[str, Any]) -> List[str]:
     return cn_queries + en_queries + site_queries
 
 
-tavily_client = TavilyClient(api_key=os.environ["TAVILY_API_KEY"])
+tavily_client = TavilyClient(api_key=TAVILY_API_KEY)
 
 
 def tavily_search(queries: List[str], max_results: int = 8) -> List[Dict[str, Any]]:
@@ -210,7 +222,7 @@ def filter_urls(results: List[Dict[str, Any]]) -> List[str]:
     return urls
 
 
-firecrawl_app = FirecrawlApp(api_key=os.environ["FIRECRAWL_API_KEY"])
+firecrawl_app = FirecrawlApp(api_key=FIRECRAWL_API_KEY)
 
 
 @retry(wait=wait_exponential(multiplier=1, min=1, max=8), stop=stop_after_attempt(3))
@@ -237,7 +249,7 @@ class PriceEvidence(BaseModel):
     published_date: Optional[str] = None
 
 
-openai_client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
 EXTRACTION_SYSTEM = """
 你是严谨的采购价格抽取助手。只输出 JSON 对象，不要输出多余文本。
