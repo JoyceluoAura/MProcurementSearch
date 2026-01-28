@@ -31,6 +31,15 @@ from openai import OpenAI
 # ====== 配置区 ======
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1JzGWhAh0rDNrqG3KiwIIEMdRzTF4pEM80z5wRkQdS30/edit?usp=sharing"
 
+INLINE_KEYS = {
+    "TAVILY_API_KEY": "",
+    "FIRECRAWL_API_KEY": "",
+    "OPENAI_API_KEY": "",
+}
+for k, v in INLINE_KEYS.items():
+    if v:
+        os.environ[k] = v
+
 FALLBACK_EQUIPMENT_LIST = [
     {"id": 1, "name_cn": "离子抛光仪", "model_hint": "Gantan PIPS 2 或 Cross Section Polisher™", "budget_wan_rmb": 80},
     {"id": 2, "name_cn": "超声波数字清洗机", "model_hint": "Hielscher UP400St / UIP500hdT", "budget_wan_rmb": 1},
@@ -126,8 +135,10 @@ def load_equipment_list(sheet_url: str, fallback: List[Dict[str, Any]]) -> List[
             "设备名称": "name_cn",
             "model_hint": "model_hint",
             "品牌及型号提示": "model_hint",
+            "品牌及型号": "model_hint",
             "budget_wan_rmb": "budget_wan_rmb",
             "拟购预算(万RMB)": "budget_wan_rmb",
+            "参考价格(万)": "budget_wan_rmb",
         }
         df = df.rename(columns=columns)
         required = {"id", "name_cn", "budget_wan_rmb"}
